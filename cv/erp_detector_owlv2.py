@@ -316,7 +316,7 @@ class ERPFullPipeline:
         Args:
             det_engine:  Preconfigured OWLv2Engine.
             cfg:         PipelineConfig with face_size, reproj_mode, etc.
-            prompt:      Single‑word prompt (will be wrapped into a 1‑element list).
+            prompt:      Single‐word prompt (will be wrapped into a 1‐element list).
             sam_client:  Optional SAMClient for mask overlay.
         """
         self.det_engine = det_engine
@@ -493,11 +493,11 @@ class ERPFullPipeline:
                                      np.roll(combined, 1, axis=1) | np.roll(combined, -1, axis=1) | combined
                             combined = combined[1:-1, 1:-1]  # Remove padding
                         
-                        annotated_np[combined] = [255, 0, 0]
+                        annotated_np[combined] = [0, 0, 0]  # Changed from [255, 0, 0] to [0, 0, 0] for black
                         logger.debug(f"→ applied enhanced SAM mask for box {coords}")
 
-            # 4c) skip drawing boxes & labels - keep only red mask overlay
-            # Just convert the image with red mask overlay to PIL format
+            # 4c) skip drawing boxes & labels - keep only black mask overlay
+            # Just convert the image with black mask overlay to PIL format
             annotated_tiles[key] = Image.fromarray(annotated_np)
 
             # 4d) reproject each filtered box → ERP coords
