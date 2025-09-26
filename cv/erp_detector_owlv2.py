@@ -114,7 +114,7 @@ class ERPBoxDetector:
         # ─── CUBEMAP MODE ──────────────────────────────────────────
         elif mode == "cube":
             faces = extract_cube_faces(frame_bgr, self.cfg.face_size)
-            face_idxs = self.cfg.cube_faces
+            face_idxs = list(range(6))  # Process all 6 cube faces to ensure full coverage
             images = [
                 Image.fromarray(cv2.cvtColor(faces[idx], cv2.COLOR_BGR2RGB))
                 for idx in face_idxs
@@ -563,6 +563,18 @@ class ERPFullPipeline:
                 erp_w=W,
                 mode="bilinear",
             )
+            # Post-reprojection seam blending
+            result_np = np.array(result)
+            blend_width = 20  # Width of the blending region
+            left = result_np[:, :blend_width]
+            right = result_np[:, -blend_width:]
+
+            for i in range(blend_width):
+                alpha = i / blend_width
+                result_np[:, i] = cv2.addWeighted(left[:, i, :], 1 - alpha, right[:, i, :], alpha, 0)
+                result_np[:, -i-1] = cv2.addWeighted(left[:, -i-1, :], alpha, right[:, -i-1, :], 1 - alpha, 0)
+
+            result = Image.fromarray(result_np)
         else:
             result = annotated_tiles["full"]
 
