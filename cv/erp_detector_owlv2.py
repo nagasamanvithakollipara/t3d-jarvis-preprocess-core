@@ -433,11 +433,6 @@ class ERPFullPipeline:
                     mask_batch, mask_scores, _ = self.sam_client.predict(
                         box=coords, multimask_output=True
                     )
-                    # log all candidates
-                    # for i, score in enumerate(mask_scores):
-                    #     logger.debug(
-                    #         f"SAM mask candidate #{i} for box {coords} → score = {score:.3f}"
-                    #     )
 
                     # combine all masks above threshold with more lenient settings
                     thresh = getattr(self.cfg, "sam_min_mask_iou", 0.6)  # Use config value, default to 0.6
@@ -467,8 +462,8 @@ class ERPFullPipeline:
                         combined = np.any(np.stack(good_masks, axis=0), axis=0)
                         
                         # Enhanced mask quality: fill holes, smooth boundaries, ensure complete coverage
-                        from scipy import ndimage
                         try:
+                            from scipy import ndimage
                             # Fill small holes in the mask
                             combined = ndimage.binary_fill_holes(combined)
                             
@@ -483,21 +478,35 @@ class ERPFullPipeline:
                             combined = ndimage.binary_erosion(combined, structure=kernel, iterations=1)
                             
                         except ImportError:
-                            # If scipy is not available, use basic operations
                             logger.warning("scipy not available, using basic mask operations")
-                            # Basic morphological operations with numpy (already imported)
                             kernel = np.ones((3, 3), np.uint8)
-                            # Simple dilation to ensure coverage
                             combined = np.pad(combined, 1, mode='constant', constant_values=False)
                             combined = np.roll(combined, 1, axis=0) | np.roll(combined, -1, axis=0) | \
                                      np.roll(combined, 1, axis=1) | np.roll(combined, -1, axis=1) | combined
                             combined = combined[1:-1, 1:-1]  # Remove padding
-                        
-                        annotated_np[combined] = [0, 0, 0]  # Changed from [255, 0, 0] to [0, 0, 0] for black
-                        logger.debug(f"→ applied enhanced SAM mask for box {coords}")
+
+                        # Enhanced blacking-out with smooth transition
+                        h, w = combined.shape
+                        y, x = np.ogrid[:h, :w]
+                        center_y, center_x = h // 2, w // 2
+                        dist_from_center = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
+                        max_dist = max(h, w) / 2
+                        feather = np.clip(dist_from_center / max_dist, 0, 1)
+                        feather_mask = 1 - feather  # Invert for smoother edge fade
+
+                        # Create a gradient mask for smooth blacking-out
+                        gradient_mask = combined.astype(float) * feather_mask
+                        gradient_mask = cv2.GaussianBlur(gradient_mask, (15, 15), 0)  # Smooth the transition
+
+                        # Apply blacking-out with weighted blending
+                        black_layer = np.zeros_like(annotated_np)
+                        for c in range(3):
+                            annotated_np[:, :, c] = (annotated_np[:, :, c] * (1 - gradient_mask) +
+                                                   black_layer[:, :, c] * gradient_mask).astype(np.uint8)
+
+                        logger.debug(f"→ applied enhanced SAM mask with smooth blacking-out for box {coords}")
 
             # 4c) skip drawing boxes & labels - keep only black mask overlay
-            # Just convert the image with black mask overlay to PIL format
             annotated_tiles[key] = Image.fromarray(annotated_np)
 
             # 4d) reproject each filtered box → ERP coords
@@ -523,8 +532,7 @@ class ERPFullPipeline:
                     dets.append({"box": px_box, "score": float(sc), "phrase": ph})
 
         # 5) post‐process all reprojections with enhanced settings
-        # Use more lenient NMS to preserve more detections
-        nms_threshold = min(0.4, self.cfg.nms_iou_thresh * 1.5)  # More lenient NMS
+        nms_threshold = min(0.4, self.cfg.nms_iou_thresh * 1.5)
         logger.debug(f"Using enhanced NMS threshold: {nms_threshold:.3f}")
         
         dets = hard_spherical_nms(
@@ -534,9 +542,8 @@ class ERPFullPipeline:
             erp_w=W,
         )
         
-        # Use more lenient seam filtering to catch more artifacts
-        seam_w_frac = min(0.99, self.cfg.seam_max_w_frac * 1.05)  # Allow wider objects
-        seam_h_frac = min(0.20, self.cfg.seam_max_h_frac * 1.5)   # Allow taller objects
+        seam_w_frac = min(0.99, self.cfg.seam_max_w_frac * 1.05)
+        seam_h_frac = min(0.20, self.cfg.seam_max_h_frac * 1.5)
         logger.debug(f"Using enhanced seam filtering: w_frac={seam_w_frac:.3f}, h_frac={seam_h_frac:.3f}")
         
         dets = filter_seam_artifacts(
